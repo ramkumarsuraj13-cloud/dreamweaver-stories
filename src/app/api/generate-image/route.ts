@@ -6,6 +6,70 @@ interface ImageRequest {
   tone: string;
 }
 
+const THEME_OPTIONS = [
+  "adventure",
+  "animals",
+  "fantasy",
+  "space",
+  "friendship",
+  "silly",
+  "nature",
+  "ocean",
+] as const;
+const TONE_OPTIONS = ["soothing", "exciting"] as const;
+const MAX_TITLE_LENGTH = 120;
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+const RATE_LIMIT_MAX = 10;
+
+const rateLimitState = new Map<string, { count: number; resetAt: number }>();
+
+function getClientIp(request: NextRequest): string {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0]?.trim() ?? "unknown";
+  }
+  return request.headers.get("x-real-ip") ?? "unknown";
+}
+
+function isRateLimited(clientIp: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitState.get(clientIp);
+  if (!entry || now > entry.resetAt) {
+    rateLimitState.set(clientIp, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return false;
+  }
+  if (entry.count >= RATE_LIMIT_MAX) {
+    return true;
+  }
+  entry.count += 1;
+  return false;
+}
+
+function parseImageRequest(payload: unknown): ImageRequest {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+
+  const data = payload as Record<string, unknown>;
+  const title = typeof data.title === "string"
+    ? data.title.trim().slice(0, MAX_TITLE_LENGTH)
+    : "";
+  const theme = typeof data.theme === "string" ? data.theme : "";
+  const tone = typeof data.tone === "string" ? data.tone : "";
+
+  if (!title) {
+    throw new Error("Invalid title");
+  }
+  if (!THEME_OPTIONS.includes(theme as typeof THEME_OPTIONS[number])) {
+    throw new Error("Invalid theme option");
+  }
+  if (!TONE_OPTIONS.includes(tone as typeof TONE_OPTIONS[number])) {
+    throw new Error("Invalid tone option");
+  }
+
+  return { title, theme, tone };
+}
+
 function getThemeStyle(theme: string): string {
   const styles: Record<string, string> = {
     adventure: "adventurous scene with paths, hills, or treasure",
@@ -22,7 +86,16 @@ function getThemeStyle(theme: string): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const { title, theme, tone }: ImageRequest = await request.json();
+    const clientIp = getClientIp(request);
+    if (isRateLimited(clientIp)) {
+      return NextResponse.json(
+        { error: "Too many requests. Please try again later." },
+        { status: 429 }
+      );
+    }
+
+    const payload = await request.json();
+    const { title, theme, tone } = parseImageRequest(payload);
     
     const moodStyle = tone === "soothing" 
       ? "soft, dreamy lighting with gentle pastels and warm colors, peaceful nighttime or twilight atmosphere"
@@ -65,6 +138,12 @@ Art direction: Whimsical watercolor and digital art style, soft rounded shapes, 
     
   } catch (error) {
     console.error("Image generation error:", error);
+    if (error instanceof Error && error.message.startsWith("Invalid")) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      );
+    }
     // Return success without image - the app will handle missing images gracefully
     return NextResponse.json(
       { error: "Failed to generate image", imageUrl: null },

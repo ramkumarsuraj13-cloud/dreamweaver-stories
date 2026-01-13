@@ -14,6 +14,100 @@ interface StoryOptions {
   rhyming: boolean;
 }
 
+const AGE_OPTIONS = ["baby", "toddler", "preschool", "early-reader"] as const;
+const LENGTH_OPTIONS = ["short", "medium", "long"] as const;
+const THEME_OPTIONS = [
+  "adventure",
+  "animals",
+  "fantasy",
+  "space",
+  "friendship",
+  "silly",
+  "nature",
+  "ocean",
+] as const;
+const TONE_OPTIONS = ["soothing", "exciting"] as const;
+const MAX_CHILD_NAME_LENGTH = 50;
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+const RATE_LIMIT_MAX = 10;
+
+const rateLimitState = new Map<string, { count: number; resetAt: number }>();
+
+function getClientIp(request: NextRequest): string {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0]?.trim() ?? "unknown";
+  }
+  return request.headers.get("x-real-ip") ?? "unknown";
+}
+
+function isRateLimited(clientIp: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitState.get(clientIp);
+  if (!entry || now > entry.resetAt) {
+    rateLimitState.set(clientIp, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return false;
+  }
+  if (entry.count >= RATE_LIMIT_MAX) {
+    return true;
+  }
+  entry.count += 1;
+  return false;
+}
+
+function parseStoryOptions(payload: unknown): StoryOptions {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+
+  const data = payload as Record<string, unknown>;
+  const childName = typeof data.childName === "string"
+    ? data.childName.trim().slice(0, MAX_CHILD_NAME_LENGTH)
+    : "";
+  const age = typeof data.age === "string" ? data.age : "";
+  const length = typeof data.length === "string" ? data.length : "";
+  const theme = typeof data.theme === "string" ? data.theme : "";
+  const tone = typeof data.tone === "string" ? data.tone : "";
+  const rhyming = data.rhyming;
+
+  if (!AGE_OPTIONS.includes(age as typeof AGE_OPTIONS[number])) {
+    throw new Error("Invalid age option");
+  }
+  if (!LENGTH_OPTIONS.includes(length as typeof LENGTH_OPTIONS[number])) {
+    throw new Error("Invalid length option");
+  }
+  if (!THEME_OPTIONS.includes(theme as typeof THEME_OPTIONS[number])) {
+    throw new Error("Invalid theme option");
+  }
+  if (!TONE_OPTIONS.includes(tone as typeof TONE_OPTIONS[number])) {
+    throw new Error("Invalid tone option");
+  }
+  if (typeof rhyming !== "boolean") {
+    throw new Error("Invalid rhyming option");
+  }
+
+  return {
+    childName,
+    age,
+    length,
+    theme,
+    tone,
+    rhyming,
+  };
+}
+
+function extractStoryJson(responseText: string) {
+  try {
+    return JSON.parse(responseText);
+  } catch {
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error("Could not parse story response");
+    }
+    return JSON.parse(jsonMatch[0]);
+  }
+}
+
 function getAgeDescription(age: string): string {
   switch (age) {
     case "baby":
@@ -58,9 +152,18 @@ function getThemeDescription(theme: string): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const options: StoryOptions = await request.json();
+    const clientIp = getClientIp(request);
+    if (isRateLimited(clientIp)) {
+      return NextResponse.json(
+        { error: "Too many requests. Please try again later." },
+        { status: 429 }
+      );
+    }
+
+    const payload = await request.json();
+    const options = parseStoryOptions(payload);
     
-    const nameInstruction = options.childName 
+    const nameInstruction = options.childName
       ? `The main character or a special character should be named "${options.childName}".` 
       : "Use a charming, gender-neutral name for the main character.";
     
@@ -111,16 +214,8 @@ Respond in this exact JSON format:
       throw new Error("No text content in response");
     }
 
-    // Parse the JSON response
-    const responseText = textContent.text;
-    
-    // Try to extract JSON from the response
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error("Could not parse story response");
-    }
-    
-    const storyData = JSON.parse(jsonMatch[0]);
+    const responseText = textContent.text.trim();
+    const storyData = extractStoryJson(responseText);
 
     return NextResponse.json({
       title: storyData.title,
@@ -129,6 +224,12 @@ Respond in this exact JSON format:
     
   } catch (error) {
     console.error("Story generation error:", error);
+    if (error instanceof Error && error.message.startsWith("Invalid")) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      );
+    }
     return NextResponse.json(
       { error: "Failed to generate story" },
       { status: 500 }
