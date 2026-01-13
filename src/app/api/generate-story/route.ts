@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { checkRateLimit } from "../_lib/rate-limit";
+import { isStorySafe } from "../_lib/safety";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -12,6 +14,74 @@ interface StoryOptions {
   theme: string;
   tone: string;
   rhyming: boolean;
+}
+
+function getClientIp(request: NextRequest): string {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0].trim();
+  }
+  return request.headers.get("x-real-ip") ?? "unknown";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function validateStoryOptions(body: unknown): { ok: true; options: StoryOptions } | { ok: false; error: string } {
+  if (!isRecord(body)) {
+    return { ok: false, error: "Invalid request payload." };
+  }
+
+  const childNameRaw = typeof body.childName === "string" ? body.childName.trim() : "";
+  if (childNameRaw.length > 50) {
+    return { ok: false, error: "Child name is too long." };
+  }
+
+  const age = typeof body.age === "string" ? body.age : "";
+  const length = typeof body.length === "string" ? body.length : "";
+  const theme = typeof body.theme === "string" ? body.theme : "";
+  const tone = typeof body.tone === "string" ? body.tone : "";
+  const rhyming = typeof body.rhyming === "boolean" ? body.rhyming : false;
+
+  const allowedAges = new Set(["baby", "toddler", "preschool", "early-reader"]);
+  const allowedLengths = new Set(["short", "medium", "long"]);
+  const allowedThemes = new Set([
+    "adventure",
+    "animals",
+    "fantasy",
+    "space",
+    "friendship",
+    "silly",
+    "nature",
+    "ocean",
+  ]);
+  const allowedTones = new Set(["soothing", "exciting"]);
+
+  if (!allowedAges.has(age)) {
+    return { ok: false, error: "Invalid age group." };
+  }
+  if (!allowedLengths.has(length)) {
+    return { ok: false, error: "Invalid story length." };
+  }
+  if (!allowedThemes.has(theme)) {
+    return { ok: false, error: "Invalid theme." };
+  }
+  if (!allowedTones.has(tone)) {
+    return { ok: false, error: "Invalid tone." };
+  }
+
+  return {
+    ok: true,
+    options: {
+      childName: childNameRaw,
+      age,
+      length,
+      theme,
+      tone,
+      rhyming,
+    },
+  };
 }
 
 function getAgeDescription(age: string): string {
@@ -58,7 +128,32 @@ function getThemeDescription(theme: string): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const options: StoryOptions = await request.json();
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return NextResponse.json(
+        { error: "Server configuration error." },
+        { status: 500 }
+      );
+    }
+
+    const ip = getClientIp(request);
+    const rate = await checkRateLimit(ip, "story");
+    if (!rate.ok) {
+      return NextResponse.json(
+        { error: "Rate limit exceeded." },
+        {
+          status: 429,
+          headers: { "Retry-After": rate.retryAfter.toString() },
+        }
+      );
+    }
+
+    const body = await request.json();
+    const validation = validateStoryOptions(body);
+    if (!validation.ok) {
+      return NextResponse.json({ error: validation.error }, { status: 400 });
+    }
+
+    const options = validation.options;
     
     const nameInstruction = options.childName 
       ? `The main character or a special character should be named "${options.childName}".` 
@@ -87,6 +182,7 @@ IMPORTANT GUIDELINES:
 - Include gentle sensory details (soft sounds, cozy feelings, warm colors)
 - End with a peaceful, sleepy conclusion
 - Make it magical and memorable
+- Do not include violence, weapons, scary content, or any adult themes
 
 Respond in this exact JSON format:
 {
@@ -122,6 +218,17 @@ Respond in this exact JSON format:
     
     const storyData = JSON.parse(jsonMatch[0]);
 
+    if (!storyData?.title || !storyData?.content) {
+      throw new Error("Invalid story response format");
+    }
+
+    if (!isStorySafe(storyData.content)) {
+      return NextResponse.json(
+        { error: "Generated story did not meet safety requirements." },
+        { status: 502 }
+      );
+    }
+
     return NextResponse.json({
       title: storyData.title,
       content: storyData.content,
@@ -131,7 +238,7 @@ Respond in this exact JSON format:
     console.error("Story generation error:", error);
     return NextResponse.json(
       { error: "Failed to generate story" },
-      { status: 500 }
+      { status: 502 }
     );
   }
 }

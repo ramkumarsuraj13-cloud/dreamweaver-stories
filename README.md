@@ -22,7 +22,8 @@ A magical bedtime story generator that creates personalized tales with AI-crafte
 
 - Node.js 18+ installed
 - Anthropic API key ([get one here](https://console.anthropic.com/))
-- OpenAI API key ([get one here](https://platform.openai.com/api-keys))
+- Together AI API key ([get one here](https://api.together.xyz/settings/api-keys))
+- Optional: Upstash Redis REST credentials for shared rate limiting
 
 ### Installation
 
@@ -40,7 +41,9 @@ A magical bedtime story generator that creates personalized tales with AI-crafte
    Then edit `.env.local` and add your API keys:
    ```
    ANTHROPIC_API_KEY=sk-ant-...
-   OPENAI_API_KEY=sk-...
+   TOGETHER_API_KEY=your_together_api_key_here
+   UPSTASH_REDIS_REST_URL=https://your-upstash-url
+   UPSTASH_REDIS_REST_TOKEN=your-upstash-token
    ```
 
 4. **Run the development server**
@@ -60,7 +63,8 @@ The easiest way to deploy:
 
 3. Add your environment variables in the Vercel dashboard:
    - `ANTHROPIC_API_KEY`
-   - `OPENAI_API_KEY`
+   - `TOGETHER_API_KEY`
+   - Optional: `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`
 
 4. Deploy! 🎉
 
