@@ -22,7 +22,7 @@ A magical bedtime story generator that creates personalized tales with AI-crafte
 
 - Node.js 18+ installed
 - Anthropic API key ([get one here](https://console.anthropic.com/))
-- OpenAI API key ([get one here](https://platform.openai.com/api-keys))
+- Together AI API key ([get one here](https://api.together.xyz/settings/api-keys))
 
 ### Installation
 
@@ -40,7 +40,7 @@ A magical bedtime story generator that creates personalized tales with AI-crafte
    Then edit `.env.local` and add your API keys:
    ```
    ANTHROPIC_API_KEY=sk-ant-...
-   OPENAI_API_KEY=sk-...
+   TOGETHER_API_KEY=sk-together-...
    ```
 
 4. **Run the development server**
@@ -60,7 +60,7 @@ The easiest way to deploy:
 
 3. Add your environment variables in the Vercel dashboard:
    - `ANTHROPIC_API_KEY`
-   - `OPENAI_API_KEY`
+   - `TOGETHER_API_KEY`
 
 4. Deploy! 🎉
 
@@ -96,13 +96,13 @@ The app uses a magical night-sky theme. Customize colors in `tailwind.config.ts`
 
 1. **User selects options** → Name, age, length, theme, tone, rhyming
 2. **Claude generates story** → Age-appropriate, themed bedtime tale
-3. **DALL-E creates illustration** → Whimsical children's book art
+3. **Together AI creates illustration** → Whimsical children's book art
 4. **Beautiful display** → Story-book style presentation
 
 ## 📄 API Routes
 
 - `POST /api/generate-story` - Generates story text using Claude
-- `POST /api/generate-image` - Creates illustration using DALL-E 3
+- `POST /api/generate-image` - Creates illustration using Together AI
 
 ## 🔒 Privacy
 
