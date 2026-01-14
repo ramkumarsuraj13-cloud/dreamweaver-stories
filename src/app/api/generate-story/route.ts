@@ -272,6 +272,14 @@ Respond in this exact JSON format:
 
   } catch (error) {
     console.error("Story generation error:", error);
+
+    // Log more details for debugging
+    if (error instanceof Error) {
+      console.error("Error name:", error.name);
+      console.error("Error message:", error.message);
+      console.error("Error stack:", error.stack);
+    }
+
     return NextResponse.json(
       { error: "Failed to generate story" },
       { status: 502 }
