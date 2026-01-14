@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { checkRateLimit } from "../_lib/rate-limit";
 import { isStorySafe } from "../_lib/safety";
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+import { PAGE_COUNTS } from "@/types/story";
 
 interface StoryOptions {
   childName: string;
@@ -99,16 +96,20 @@ function getAgeDescription(age: string): string {
   }
 }
 
-function getLengthGuide(length: string): string {
+function getPageCount(length: string): number {
+  return PAGE_COUNTS[length as keyof typeof PAGE_COUNTS] || 7;
+}
+
+function getWordsPerPage(length: string, pageCount: number): string {
   switch (length) {
     case "short":
-      return "Keep the story very brief - about 150-200 words (roughly 2 minutes of reading time).";
+      return "30-40 words per page";
     case "medium":
-      return "Make the story a comfortable length - about 400-500 words (roughly 5 minutes of reading time).";
+      return "50-70 words per page";
     case "long":
-      return "Create a longer, more developed story - about 800-1000 words (roughly 10 minutes of reading time).";
+      return "80-100 words per page";
     default:
-      return "about 400-500 words";
+      return "50-70 words per page";
   }
 }
 
@@ -128,12 +129,16 @@ function getThemeDescription(theme: string): string {
 
 export async function POST(request: NextRequest) {
   try {
-    if (!process.env.ANTHROPIC_API_KEY) {
+    if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
         { error: "Server configuration error." },
         { status: 500 }
       );
     }
+
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
 
     const ip = getClientIp(request);
     const rate = await checkRateLimit(ip, "story");
@@ -154,86 +159,117 @@ export async function POST(request: NextRequest) {
     }
 
     const options = validation.options;
-    
-    const nameInstruction = options.childName 
-      ? `The main character or a special character should be named "${options.childName}".` 
+    const pageCount = getPageCount(options.length);
+    const wordsPerPage = getWordsPerPage(options.length, pageCount);
+
+    const nameInstruction = options.childName
+      ? `The main character or a special character should be named "${options.childName}".`
       : "Use a charming, gender-neutral name for the main character.";
-    
+
     const rhymeInstruction = options.rhyming
       ? "Write the entire story in rhyming verse, like a children's poem. Use AABB or ABAB rhyme schemes."
       : "Write in flowing, rhythmic prose that's pleasant to read aloud.";
-    
+
     const toneInstruction = options.tone === "soothing"
       ? "Keep the tone calm, peaceful, and sleep-inducing. End with the character feeling safe, cozy, and ready to sleep. Avoid anything startling or overly exciting."
       : "Keep the tone fun and engaging, but still end on a satisfying, peaceful note appropriate for bedtime.";
 
-    const prompt = `You are a beloved children's author creating a bedtime story. Write an original story for ${getAgeDescription(options.age)}
+    const prompt = `You are a beloved children's author creating a bedtime picture book. Write an original story for ${getAgeDescription(options.age)}
 
 STORY REQUIREMENTS:
 - Theme: ${getThemeDescription(options.theme)}
-- ${getLengthGuide(options.length)}
+- Total pages: ${pageCount} pages
+- Each page should have ${wordsPerPage} (2-4 sentences)
 - ${nameInstruction}
 - ${rhymeInstruction}
 - ${toneInstruction}
 
+STRUCTURE REQUIREMENTS:
+- Page 1: Introduction - establish setting and main character (describe their appearance in detail for the imagePrompt)
+- Pages 2-${pageCount - 2}: Story development with clear, distinct scenes
+- Page ${pageCount - 1}: Climax or key moment
+- Page ${pageCount}: Peaceful, sleepy conclusion
+
+For EACH page, you must provide:
+1. "text": The story text to display (2-4 sentences that will be read aloud)
+2. "imagePrompt": A detailed visual description for the illustrator (describe the specific scene, character poses, colors, lighting, mood, setting details - be very specific about what should be shown in the illustration)
+
 IMPORTANT GUIDELINES:
 - Create an original, creative story (never reference existing characters or stories)
+- Each page should be a distinct scene that can be illustrated separately
+- In the FIRST page's imagePrompt, describe the main character's appearance in detail (this establishes consistency)
+- Image prompts should describe concrete visual elements, not abstract concepts
 - Use vivid but age-appropriate imagery
 - Include gentle sensory details (soft sounds, cozy feelings, warm colors)
 - End with a peaceful, sleepy conclusion
-- Make it magical and memorable
 - Do not include violence, weapons, scary content, or any adult themes
 
 Respond in this exact JSON format:
 {
   "title": "The Story Title",
-  "content": "The full story text with paragraph breaks indicated by double newlines"
+  "pages": [
+    {
+      "pageNumber": 1,
+      "text": "Story text for page 1 that will be read aloud to the child...",
+      "imagePrompt": "A cozy bedroom at twilight with soft purple light streaming through gauzy curtains. A small bunny with fluffy white fur, pink inner ears, and bright curious eyes sits on a quilted bed covered in star patterns. The room has warm wooden furniture and glowing fairy lights."
+    },
+    {
+      "pageNumber": 2,
+      "text": "Story text for page 2...",
+      "imagePrompt": "Detailed visual description for page 2..."
+    }
+  ]
 }`;
 
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 2000,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
+    // Use OpenAI Responses API with gpt-5-nano
+    const response = await openai.responses.create({
+      model: "gpt-5-nano",
+      input: prompt,
+      max_output_tokens: 4000,
     });
 
     // Extract the text content
-    const textContent = message.content.find((block) => block.type === "text");
-    if (!textContent || textContent.type !== "text") {
+    const responseText = response.output_text;
+    if (!responseText) {
       throw new Error("No text content in response");
     }
 
-    // Parse the JSON response
-    const responseText = textContent.text;
-    
     // Try to extract JSON from the response
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       throw new Error("Could not parse story response");
     }
-    
+
     const storyData = JSON.parse(jsonMatch[0]);
 
-    if (!storyData?.title || !storyData?.content) {
+    if (!storyData?.title || !Array.isArray(storyData?.pages)) {
       throw new Error("Invalid story response format");
     }
 
-    if (!isStorySafe(storyData.content)) {
-      return NextResponse.json(
-        { error: "Generated story did not meet safety requirements." },
-        { status: 502 }
-      );
+    // Validate each page
+    for (const page of storyData.pages) {
+      if (!page.pageNumber || !page.text || !page.imagePrompt) {
+        throw new Error("Invalid page format - missing required fields");
+      }
+
+      // Safety check on each page's text
+      if (!isStorySafe(page.text)) {
+        return NextResponse.json(
+          { error: "Generated story did not meet safety requirements." },
+          { status: 502 }
+        );
+      }
     }
 
     return NextResponse.json({
       title: storyData.title,
-      content: storyData.content,
+      pages: storyData.pages.map((page: { pageNumber: number; text: string; imagePrompt: string }) => ({
+        pageNumber: page.pageNumber,
+        text: page.text,
+        imagePrompt: page.imagePrompt,
+      })),
     });
-    
+
   } catch (error) {
     console.error("Story generation error:", error);
     return NextResponse.json(

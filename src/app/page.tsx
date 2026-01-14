@@ -1,21 +1,11 @@
 "use client";
 
-import { useState } from "react";
-
-interface StoryOptions {
-  childName: string;
-  age: string;
-  length: string;
-  theme: string;
-  tone: string;
-  rhyming: boolean;
-}
-
-interface GeneratedStory {
-  title: string;
-  content: string;
-  imageUrl?: string;
-}
+import { useState, useCallback } from "react";
+import { FlipBook } from "@/components/FlipBook";
+import { LoadingProgress } from "@/components/LoadingProgress";
+import { useStoryGeneration } from "@/hooks/useStoryGeneration";
+import type { StoryOptions, GeneratedStory } from "@/types/story";
+import { PAGE_COUNTS } from "@/types/story";
 
 export default function Home() {
   const [options, setOptions] = useState<StoryOptions>({
@@ -26,69 +16,41 @@ export default function Home() {
     tone: "soothing",
     rhyming: false,
   });
-  
+
   const [story, setStory] = useState<GeneratedStory | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [loadingStage, setLoadingStage] = useState("");
-  const [error, setError] = useState("");
+  const { generate, loadingState, error, reset, retryImage } =
+    useStoryGeneration();
 
   const handleGenerate = async () => {
-    setIsLoading(true);
-    setError("");
-    setStory(null);
-    
-    try {
-      // Generate story
-      setLoadingStage("Weaving your magical tale...");
-      const storyResponse = await fetch("/api/generate-story", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(options),
-      });
-      
-      if (!storyResponse.ok) {
-        throw new Error("Failed to generate story");
-      }
-      
-      const storyData = await storyResponse.json();
-      
-      // Generate image
-      setLoadingStage("Painting the dreamscape...");
-      const imageResponse = await fetch("/api/generate-image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          title: storyData.title,
-          theme: options.theme,
-          tone: options.tone,
-        }),
-      });
-      
-      let imageUrl = undefined;
-      if (imageResponse.ok) {
-        const imageData = await imageResponse.json();
-        imageUrl = imageData.imageUrl;
-      }
-      
-      setStory({
-        title: storyData.title,
-        content: storyData.content,
-        imageUrl,
-      });
-      
-    } catch (err) {
-      setError("Something went wrong while creating your story. Please try again.");
-      console.error(err);
-    } finally {
-      setIsLoading(false);
-      setLoadingStage("");
+    const generatedStory = await generate(options);
+    if (generatedStory) {
+      setStory(generatedStory);
     }
   };
 
   const handleNewStory = () => {
     setStory(null);
-    setError("");
+    reset();
   };
+
+  const handleRetryImage = useCallback(
+    async (pageNumber: number) => {
+      if (!story) return;
+      const updatedPage = await retryImage(story, pageNumber, options);
+      if (updatedPage) {
+        // Force re-render with updated story
+        setStory({ ...story });
+      }
+    },
+    [story, options, retryImage]
+  );
+
+  const isLoading =
+    loadingState.stage === "generating-story" ||
+    loadingState.stage === "generating-images";
+
+  // Get page count for display
+  const pageCount = PAGE_COUNTS[options.length as keyof typeof PAGE_COUNTS] || 7;
 
   return (
     <main className="min-h-screen px-4 py-8 md:py-16">
@@ -102,24 +64,27 @@ export default function Home() {
             Dreamweaver Stories
           </h1>
           <p className="text-night-200 text-lg md:text-xl max-w-2xl mx-auto">
-            Create magical, personalized bedtime tales for your little ones
+            Create magical, personalized bedtime picture books for your little
+            ones
           </p>
         </header>
 
-        {!story ? (
-          /* Story Options Form */
+        {/* Form - shown when no story and not loading */}
+        {!story && !isLoading && (
           <div className="dream-card bg-night-900/60 rounded-3xl p-6 md:p-10 border border-night-700/50 animate-slide-up">
             <div className="grid gap-6 md:gap-8">
-              
               {/* Child's Name */}
               <div className="space-y-2">
                 <label className="block text-dream-gold font-medium text-sm uppercase tracking-wider">
-                  Child&apos;s Name <span className="text-night-400 normal-case">(optional)</span>
+                  Child&apos;s Name{" "}
+                  <span className="text-night-400 normal-case">(optional)</span>
                 </label>
                 <input
                   type="text"
                   value={options.childName}
-                  onChange={(e) => setOptions({ ...options, childName: e.target.value })}
+                  onChange={(e) =>
+                    setOptions({ ...options, childName: e.target.value })
+                  }
                   placeholder="Enter name to personalize the story"
                   className="dream-input w-full bg-night-800/50 border border-night-600/50 rounded-xl px-5 py-4 text-white placeholder-night-400 transition-all"
                 />
@@ -133,7 +98,12 @@ export default function Home() {
                   </label>
                   <select
                     value={options.age}
-                    onChange={(e) => setOptions({ ...options, age: e.target.value })}
+                    onChange={(e) =>
+                      setOptions({
+                        ...options,
+                        age: e.target.value as StoryOptions["age"],
+                      })
+                    }
                     className="dream-select w-full bg-night-800/50 border border-night-600/50 rounded-xl px-5 py-4 text-white transition-all cursor-pointer"
                   >
                     <option value="baby">Baby (0-1 years)</option>
@@ -145,16 +115,21 @@ export default function Home() {
 
                 <div className="space-y-2">
                   <label className="block text-dream-gold font-medium text-sm uppercase tracking-wider">
-                    Story Length
+                    Book Length
                   </label>
                   <select
                     value={options.length}
-                    onChange={(e) => setOptions({ ...options, length: e.target.value })}
+                    onChange={(e) =>
+                      setOptions({
+                        ...options,
+                        length: e.target.value as StoryOptions["length"],
+                      })
+                    }
                     className="dream-select w-full bg-night-800/50 border border-night-600/50 rounded-xl px-5 py-4 text-white transition-all cursor-pointer"
                   >
-                    <option value="short">Quick (~2 min)</option>
-                    <option value="medium">Medium (~5 min)</option>
-                    <option value="long">Long (~10 min)</option>
+                    <option value="short">Short (5 pages)</option>
+                    <option value="medium">Medium (7 pages)</option>
+                    <option value="long">Long (10 pages)</option>
                   </select>
                 </div>
               </div>
@@ -177,7 +152,12 @@ export default function Home() {
                   ].map((theme) => (
                     <button
                       key={theme.value}
-                      onClick={() => setOptions({ ...options, theme: theme.value })}
+                      onClick={() =>
+                        setOptions({
+                          ...options,
+                          theme: theme.value as StoryOptions["theme"],
+                        })
+                      }
                       className={`p-4 rounded-xl border-2 transition-all text-center ${
                         options.theme === theme.value
                           ? "border-dream-purple bg-dream-purple/20 shadow-lg shadow-dream-purple/20"
@@ -199,12 +179,25 @@ export default function Home() {
                   </label>
                   <div className="flex gap-3">
                     {[
-                      { value: "soothing", label: "Soothing 😴", desc: "Calm & peaceful" },
-                      { value: "exciting", label: "Exciting ⚡", desc: "Fun & energetic" },
+                      {
+                        value: "soothing",
+                        label: "Soothing 😴",
+                        desc: "Calm & peaceful",
+                      },
+                      {
+                        value: "exciting",
+                        label: "Exciting ⚡",
+                        desc: "Fun & energetic",
+                      },
                     ].map((tone) => (
                       <button
                         key={tone.value}
-                        onClick={() => setOptions({ ...options, tone: tone.value })}
+                        onClick={() =>
+                          setOptions({
+                            ...options,
+                            tone: tone.value as StoryOptions["tone"],
+                          })
+                        }
                         className={`flex-1 p-4 rounded-xl border-2 transition-all text-center ${
                           options.tone === tone.value
                             ? "border-dream-purple bg-dream-purple/20"
@@ -212,7 +205,9 @@ export default function Home() {
                         }`}
                       >
                         <span className="block font-medium">{tone.label}</span>
-                        <span className="text-xs text-night-300">{tone.desc}</span>
+                        <span className="text-xs text-night-300">
+                          {tone.desc}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -223,10 +218,16 @@ export default function Home() {
                     Make it Rhyme?
                   </label>
                   <button
-                    onClick={() => setOptions({ ...options, rhyming: !options.rhyming })}
+                    onClick={() =>
+                      setOptions({ ...options, rhyming: !options.rhyming })
+                    }
                     className="flex items-center gap-4 p-4 rounded-xl border-2 border-night-600/50 bg-night-800/30 w-full hover:border-night-500 transition-all"
                   >
-                    <div className={`toggle-switch ${options.rhyming ? "active" : ""}`} />
+                    <div
+                      className={`toggle-switch ${
+                        options.rhyming ? "active" : ""
+                      }`}
+                    />
                     <span className="font-medium">
                       {options.rhyming ? "Yes, make it rhyme! 🎵" : "Regular prose"}
                     </span>
@@ -247,70 +248,33 @@ export default function Home() {
                 disabled={isLoading}
                 className="magic-btn w-full bg-gradient-to-r from-dream-purple via-dream-pink to-dream-purple bg-[length:200%_100%] hover:bg-right text-white font-bold text-lg py-5 px-8 rounded-2xl transition-all duration-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-dream-purple/30 hover:shadow-dream-purple/50"
               >
-                {isLoading ? (
-                  <span className="flex items-center justify-center gap-3">
-                    <svg className="animate-spin h-6 w-6" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    {loadingStage}
-                  </span>
-                ) : (
-                  <span className="flex items-center justify-center gap-2">
-                    <span>✨</span>
-                    Create Magical Story
-                    <span>✨</span>
-                  </span>
-                )}
+                <span className="flex items-center justify-center gap-2">
+                  <span>✨</span>
+                  Create {pageCount}-Page Picture Book
+                  <span>✨</span>
+                </span>
               </button>
+
+              {/* Hint */}
+              <p className="text-center text-night-400 text-sm">
+                Each page will have its own unique illustration
+              </p>
             </div>
           </div>
-        ) : (
-          /* Story Display */
+        )}
+
+        {/* Loading Progress */}
+        {isLoading && <LoadingProgress loadingState={loadingState} />}
+
+        {/* FlipBook - shown when story exists and loading complete */}
+        {story && loadingState.stage === "complete" && (
           <div className="animate-fade-in">
-            {/* Story Header */}
-            <div className="text-center mb-8">
-              <h2 className="font-display text-3xl md:text-5xl font-bold text-dream-gold mb-4">
-                {story.title}
-              </h2>
-              <div className="w-32 h-1 bg-gradient-to-r from-transparent via-dream-gold to-transparent mx-auto" />
-            </div>
-
-            {/* Story Image */}
-            {story.imageUrl && (
-              <div className="story-image-container mb-10 max-w-2xl mx-auto">
-                <img
-                  src={story.imageUrl}
-                  alt={story.title}
-                  className="w-full aspect-[4/3] object-cover"
-                />
-              </div>
-            )}
-
-            {/* Story Content */}
-            <div className="dream-card bg-night-900/60 rounded-3xl p-6 md:p-12 border border-night-700/50 mb-8">
-              <div className="story-text text-night-100 max-w-3xl mx-auto">
-                {story.content.split("\n\n").map((paragraph, index) => (
-                  <p key={index}>{paragraph}</p>
-                ))}
-              </div>
-            </div>
-
-            {/* The End */}
-            <div className="text-center mb-10">
-              <span className="font-display text-2xl text-dream-gold italic">The End</span>
-              <div className="mt-2 text-3xl">🌟</div>
-            </div>
-
-            {/* New Story Button */}
-            <div className="text-center">
-              <button
-                onClick={handleNewStory}
-                className="magic-btn bg-night-800/80 hover:bg-night-700/80 text-white font-semibold py-4 px-8 rounded-xl border border-night-600/50 transition-all"
-              >
-                ← Create Another Story
-              </button>
-            </div>
+            <FlipBook
+              story={story}
+              options={options}
+              onNewStory={handleNewStory}
+              onRetryImage={handleRetryImage}
+            />
           </div>
         )}
 
