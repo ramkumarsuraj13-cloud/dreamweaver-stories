@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { checkRateLimit } from "../_lib/rate-limit";
 
-type ImageQuality = "low" | "medium" | "high";
+// DALL-E 3 only supports "standard" and "hd" quality
+type ImageQuality = "standard" | "hd";
 
 interface ImageRequest {
   pageNumber: number;
@@ -44,9 +45,10 @@ function validateImageRequest(body: unknown): { ok: true; data: ImageRequest } |
   const tone = typeof body.tone === "string" ? body.tone : "";
   const characterDescription = typeof body.characterDescription === "string" ? body.characterDescription : undefined;
 
-  // Validate quality parameter (default to "medium" if not provided)
-  const allowedQualities = new Set<ImageQuality>(["low", "medium", "high"]);
-  let quality: ImageQuality = "medium";
+  // Validate quality parameter (default to "standard" if not provided)
+  // DALL-E 3 only supports "standard" and "hd"
+  const allowedQualities = new Set<ImageQuality>(["standard", "hd"]);
+  let quality: ImageQuality = "standard";
   if (typeof body.quality === "string" && allowedQualities.has(body.quality as ImageQuality)) {
     quality = body.quality as ImageQuality;
   }
@@ -127,9 +129,9 @@ ${characterDescription ? `Character reference: ${characterDescription}` : ""}
 
 Art direction: ${moodStyle}. Whimsical watercolor and digital art style, soft rounded shapes, gentle and cozy atmosphere, suitable for young children. No text or words in the image. High quality, professional children's book illustration. Safe for all ages. Consistent art style throughout the book.`;
 
-    // Use OpenAI Images API with gpt-image-1
+    // Use OpenAI Images API with DALL-E 3
     const response = await openai.images.generate({
-      model: "gpt-image-1",
+      model: "dall-e-3",
       prompt: prompt,
       size: "1024x1024",
       quality: quality,

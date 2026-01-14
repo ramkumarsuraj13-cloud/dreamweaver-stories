@@ -38,4 +38,7 @@ next-env.d.ts
 .DS_Store
 Thumbs.db
 
+# Temp files
+tmpclaude-*
+
 .vercel
