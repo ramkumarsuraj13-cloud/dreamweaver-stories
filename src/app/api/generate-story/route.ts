@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
 import { checkRateLimit } from "../_lib/rate-limit";
 import { isStorySafe } from "../_lib/safety";
 import { PAGE_COUNTS } from "@/types/story";
@@ -23,6 +22,84 @@ function getClientIp(request: NextRequest): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function extractResponseText(response: unknown): string | null {
+  if (!isRecord(response)) {
+    return null;
+  }
+
+  const primary = typeof response["output_text"] === "string" ? response["output_text"].trim() : "";
+  if (primary) {
+    return primary;
+  }
+
+  const output = Array.isArray(response["output"]) ? response["output"] : null;
+  if (!output) {
+    return null;
+  }
+
+  const text = output
+    .flatMap((item) => {
+      if (!isRecord(item)) {
+        return [];
+      }
+      const content = Array.isArray(item["content"]) ? item["content"] : [];
+      return content;
+    })
+    .map((part) => {
+      if (!isRecord(part)) {
+        return "";
+      }
+      const type = typeof part["type"] === "string" ? part["type"] : "";
+      if (type === "output_text" || type === "text") {
+        return typeof part["text"] === "string" ? part["text"] : "";
+      }
+      if (type === "output_json") {
+        const json = part["json"];
+        if (isRecord(json) || Array.isArray(json)) {
+          return JSON.stringify(json);
+        }
+      }
+      if (typeof part["text"] === "string") {
+        return part["text"];
+      }
+      return "";
+    })
+    .join("")
+    .trim();
+
+  return text || null;
+}
+
+function describeResponseOutput(response: unknown): string {
+  if (!isRecord(response)) {
+    return "response is not an object";
+  }
+
+  const output = Array.isArray(response["output"]) ? response["output"] : null;
+  if (!output) {
+    return "output is missing or not an array";
+  }
+
+  const summaries = output.map((item) => {
+    if (!isRecord(item)) {
+      return "unknown:[none]";
+    }
+    const content = Array.isArray(item["content"]) ? item["content"] : [];
+    const contentTypes = content
+      .map((part) => {
+        if (!isRecord(part)) {
+          return "unknown";
+        }
+        return typeof part["type"] === "string" ? part["type"] : "unknown";
+      })
+      .join(",");
+    const itemType = typeof item["type"] === "string" ? item["type"] : "unknown";
+    return `${itemType}:[${contentTypes || "none"}]`;
+  });
+
+  return summaries.join(" | ");
 }
 
 function validateStoryOptions(body: unknown): { ok: true; options: StoryOptions } | { ok: false; error: string } {
@@ -136,10 +213,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-
     const ip = getClientIp(request);
     const rate = await checkRateLimit(ip, "story");
     if (!rate.ok) {
@@ -152,7 +225,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body = await request.json();
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid JSON body." },
+        { status: 400 }
+      );
+    }
     const validation = validateStoryOptions(body);
     if (!validation.ok) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
@@ -221,33 +302,67 @@ Respond in this exact JSON format:
   ]
 }`;
 
-    // Use OpenAI Responses API with gpt-5-nano
-    const response = await openai.responses.create({
-      model: "gpt-5-nano",
+    // Use OpenAI Responses API with gpt-4o-mini via fetch for explicit params.
+    const responseParams = {
+      model: "gpt-4o-mini",
       input: prompt,
+      text: {
+        format: { type: "json_object" },
+      },
       max_output_tokens: 4000,
-    });
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const openaiResponse = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(responseParams),
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeoutId));
+
+    if (!openaiResponse.ok) {
+      const errorText = await openaiResponse.text();
+      throw new Error(`OpenAI error ${openaiResponse.status}: ${errorText}`);
+    }
+
+    const response = (await openaiResponse.json()) as unknown;
 
     // Extract the text content
-    const responseText = response.output_text;
+    const responseText = extractResponseText(response);
     if (!responseText) {
-      throw new Error("No text content in response");
+      const summary = describeResponseOutput(response);
+      console.error("Response output summary:", summary);
+      throw new Error(`No text content in response (${summary})`);
     }
 
-    // Try to extract JSON from the response
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error("Could not parse story response");
+    let storyData: unknown;
+    try {
+      storyData = JSON.parse(responseText.trim());
+    } catch {
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error("Could not parse story response");
+      }
+      storyData = JSON.parse(jsonMatch[0]);
     }
 
-    const storyData = JSON.parse(jsonMatch[0]);
+    if (!isRecord(storyData)) {
+      throw new Error("Invalid story response format");
+    }
 
-    if (!storyData?.title || !Array.isArray(storyData?.pages)) {
+    const title = typeof storyData.title === "string" ? storyData.title : "";
+    const pages = Array.isArray(storyData.pages) ? storyData.pages : null;
+
+    if (!title || !pages) {
       throw new Error("Invalid story response format");
     }
 
     // Validate each page
-    for (const page of storyData.pages) {
+    for (const page of pages) {
       if (!page.pageNumber || !page.text || !page.imagePrompt) {
         throw new Error("Invalid page format - missing required fields");
       }
@@ -262,8 +377,8 @@ Respond in this exact JSON format:
     }
 
     return NextResponse.json({
-      title: storyData.title,
-      pages: storyData.pages.map((page: { pageNumber: number; text: string; imagePrompt: string }) => ({
+      title,
+      pages: pages.map((page: { pageNumber: number; text: string; imagePrompt: string }) => ({
         pageNumber: page.pageNumber,
         text: page.text,
         imagePrompt: page.imagePrompt,
@@ -280,8 +395,9 @@ Respond in this exact JSON format:
       console.error("Error stack:", error.stack);
     }
 
+    const details = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(
-      { error: "Failed to generate story" },
+      { error: "Failed to generate story", details },
       { status: 502 }
     );
   }

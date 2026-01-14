@@ -98,7 +98,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body = await request.json();
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid JSON body." },
+        { status: 400 }
+      );
+    }
     const validation = validateImageRequest(body);
     if (!validation.ok) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
@@ -119,9 +127,9 @@ ${characterDescription ? `Character reference: ${characterDescription}` : ""}
 
 Art direction: ${moodStyle}. Whimsical watercolor and digital art style, soft rounded shapes, gentle and cozy atmosphere, suitable for young children. No text or words in the image. High quality, professional children's book illustration. Safe for all ages. Consistent art style throughout the book.`;
 
-    // Use OpenAI Images API with gpt-image-1-mini
+    // Use OpenAI Images API with gpt-image-1
     const response = await openai.images.generate({
-      model: "gpt-image-1-mini",
+      model: "gpt-image-1",
       prompt: prompt,
       size: "1024x1024",
       quality: quality,
@@ -138,8 +146,9 @@ Art direction: ${moodStyle}. Whimsical watercolor and digital art style, soft ro
 
   } catch (error) {
     console.error("Image generation error:", error);
+    const details = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(
-      { error: "Failed to generate image", imageUrl: null },
+      { error: "Failed to generate image", imageUrl: null, details },
       { status: 502 }
     );
   }

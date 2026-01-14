@@ -10,10 +10,10 @@ const nextConfig = {
             value: [
               "default-src 'self'",
               "img-src 'self' data: https:",
-              "font-src 'self' data: https:",
-              "style-src 'self' 'unsafe-inline'",
+              "font-src 'self' data: https://fonts.gstatic.com",
+              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-              "connect-src 'self' https://api.anthropic.com https://api.together.xyz",
+              "connect-src 'self' https://api.anthropic.com https://api.together.xyz https://api.openai.com",
               "frame-ancestors 'none'",
               "base-uri 'self'",
               "form-action 'self'",
